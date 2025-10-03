@@ -8,30 +8,48 @@ st.set_page_config(page_title="EXIM Trade Analysis Demo", layout="wide")
 # Load & Clean Data
 # ----------------------------
 @st.cache_data
-def load_data():
-    df = pd.read_excel(
-        "EXIM_Trade_Analysis_Report_579700_042024114401 (1).xlsx",
-        sheet_name="Trade analysis report",
-        header=2
-    )
+def load_data(path="exim_data.xlsx", sheet_name="Trade analysis report"):
+    # read excel (header at row index 2)
+    df = pd.read_excel(path, sheet_name=sheet_name, header=2)
 
-    # Clean column names
+    # clean column names
     df.columns = [str(c).strip() for c in df.columns]
 
-    # Ensure numeric
-    df["QUANTITY"] = pd.to_numeric(df["QUANTITY"], errors="coerce")
-    df["VALUE(USD)"] = (
-        df["VALUE(USD)"].replace("[\$,]", "", regex=True).astype(float)
-    )
-    df["UNIT PRICE"] = pd.to_numeric(df["UNIT PRICE"], errors="coerce")
+    # Ensure DATE parsed
+    if "DATE" in df.columns:
+        df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
+
+    # Clean QUANTITY
+    if "QUANTITY" in df.columns:
+        df["QUANTITY"] = pd.to_numeric(df["QUANTITY"], errors="coerce").fillna(0)
+
+    # Clean VALUE(USD)
+    if "VALUE(USD)" in df.columns:
+        df["VALUE(USD)"] = (
+            df["VALUE(USD)"].astype(str)
+            .replace(r"[\$,]", "", regex=True)
+            .str.strip()
+        )
+        df["VALUE(USD)"] = pd.to_numeric(df["VALUE(USD)"], errors="coerce").fillna(0.0)
+
+    # Clean UNIT PRICE
+    if "UNIT PRICE" in df.columns:
+        df["UNIT PRICE"] = (
+            df["UNIT PRICE"].astype(str)
+            .replace(r"[\$,]", "", regex=True)
+            .str.strip()
+        )
+        df["UNIT PRICE"] = pd.to_numeric(df["UNIT PRICE"], errors="coerce")
 
     # Compute ASP safely
-    df["ASP_COMPUTED"] = df["UNIT PRICE"]
-    df.loc[df["ASP_COMPUTED"].isna(), "ASP_COMPUTED"] = (
-        df["VALUE(USD)"] / df["QUANTITY"]
+    df["ASP_COMPUTED"] = df["UNIT PRICE"].copy() if "UNIT PRICE" in df.columns else np.nan
+    mask_missing_asp = df["ASP_COMPUTED"].isna() & (df["QUANTITY"] > 0)
+    df.loc[mask_missing_asp, "ASP_COMPUTED"] = (
+        df.loc[mask_missing_asp, "VALUE(USD)"] / df.loc[mask_missing_asp, "QUANTITY"]
     )
 
     return df
+
 
 df = load_data()
 
@@ -91,18 +109,28 @@ st.header("2. Growth % in terms of Quantity / Value")
 
 col1, col2 = st.columns(2)
 with col1:
-    start_period = st.date_input("Start Period", date_min)
+    start_period = st.date_input("Start Period", date_min, key="start_period")
 with col2:
-    end_period = st.date_input("End Period", date_max)
+    end_period = st.date_input("End Period", date_max, key="end_period")
 
 df_start = df[(pd.to_datetime(df["DATE"]) <= pd.to_datetime(start_period))]
 df_end = df[(pd.to_datetime(df["DATE"]) <= pd.to_datetime(end_period))]
 
-qty_growth = (df_end["QUANTITY"].sum() - df_start["QUANTITY"].sum()) / df_start["QUANTITY"].sum() * 100 if df_start["QUANTITY"].sum() else np.nan
-val_growth = (df_end["VALUE(USD)"].sum() - df_start["VALUE(USD)"].sum()) / df_start["VALUE(USD)"].sum() * 100 if df_start["VALUE(USD)"].sum() else np.nan
+qty_growth = (
+    (df_end["QUANTITY"].sum() - df_start["QUANTITY"].sum())
+    / df_start["QUANTITY"].sum() * 100
+    if df_start["QUANTITY"].sum()
+    else np.nan
+)
+val_growth = (
+    (df_end["VALUE(USD)"].sum() - df_start["VALUE(USD)"].sum())
+    / df_start["VALUE(USD)"].sum() * 100
+    if df_start["VALUE(USD)"].sum()
+    else np.nan
+)
 
-st.metric("Growth in Quantity (%)", f"{qty_growth:.2f}%")
-st.metric("Growth in Value (%)", f"{val_growth:.2f}%")
+st.metric("Growth in Quantity (%)", f"{qty_growth:.2f}%" if pd.notna(qty_growth) else "N/A")
+st.metric("Growth in Value (%)", f"{val_growth:.2f}%" if pd.notna(val_growth) else "N/A")
 
 # ----------------------------
 # 3. Average Selling Price
@@ -110,7 +138,12 @@ st.metric("Growth in Value (%)", f"{val_growth:.2f}%")
 st.header("3. Average Selling Price (ASP)")
 
 asp_group = st.selectbox("Group ASP by:", ["HS CODE", "BUYER", "SELLER", "INDUSTRY"])
-asp_summary = df_filtered.groupby(asp_group)["ASP_COMPUTED"].mean().reset_index().sort_values("ASP_COMPUTED", ascending=False)
+asp_summary = (
+    df_filtered.groupby(asp_group)["ASP_COMPUTED"]
+    .mean()
+    .reset_index()
+    .sort_values("ASP_COMPUTED", ascending=False)
+)
 st.dataframe(asp_summary)
 
 # ----------------------------
@@ -118,13 +151,19 @@ st.dataframe(asp_summary)
 # ----------------------------
 st.header("4. Target Customers")
 
-hs_choice = st.selectbox("Select HS Code", sorted(df_filtered["HS CODE"].dropna().unique()))
+if len(hs_codes) > 0:
+    hs_choice = st.selectbox("Select HS Code", hs_codes)
+else:
+    hs_choice = st.selectbox("Select HS Code", sorted(df_filtered["HS CODE"].dropna().unique()))
+
 asp_min = st.number_input("Min ASP", value=float(df_filtered["ASP_COMPUTED"].min() or 0))
 asp_max = st.number_input("Max ASP", value=float(df_filtered["ASP_COMPUTED"].max() or 1000))
 
-target_df = df_filtered[(df_filtered["HS CODE"] == hs_choice) &
-                        (df_filtered["ASP_COMPUTED"] >= asp_min) &
-                        (df_filtered["ASP_COMPUTED"] <= asp_max)]
+target_df = df_filtered[
+    (df_filtered["HS CODE"] == hs_choice)
+    & (df_filtered["ASP_COMPUTED"] >= asp_min)
+    & (df_filtered["ASP_COMPUTED"] <= asp_max)
+]
 target_summary = target_df.groupby("BUYER").agg(
     Total_Qty=("QUANTITY", "sum"),
     Total_Value=("VALUE(USD)", "sum"),
@@ -137,16 +176,28 @@ st.dataframe(target_summary)
 # ----------------------------
 st.header("5. Competitor Mapping")
 
-comp_summary = df_filtered.groupby("SELLER").agg(
-    Total_Qty=("QUANTITY", "sum"),
-    Total_Value=("VALUE(USD)", "sum"),
-    Avg_ASP=("ASP_COMPUTED", "mean")
-).reset_index().sort_values("Total_Value", ascending=False)
+comp_summary = (
+    df_filtered.groupby("SELLER")
+    .agg(
+        Total_Qty=("QUANTITY", "sum"),
+        Total_Value=("VALUE(USD)", "sum"),
+        Avg_ASP=("ASP_COMPUTED", "mean"),
+    )
+    .reset_index()
+    .sort_values("Total_Value", ascending=False)
+)
 
 st.subheader("Top Competitors by Value")
 st.dataframe(comp_summary.head(10))
 
-pivot = pd.pivot_table(df_filtered, index="SELLER", columns="HS CODE", values="VALUE(USD)", aggfunc="sum", fill_value=0)
+pivot = pd.pivot_table(
+    df_filtered,
+    index="SELLER",
+    columns="HS CODE",
+    values="VALUE(USD)",
+    aggfunc="sum",
+    fill_value=0,
+)
 st.subheader("Seller vs HS Code Mapping")
 st.dataframe(pivot)
 
