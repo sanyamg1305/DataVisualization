@@ -8,7 +8,7 @@ st.set_page_config(page_title="EXIM Trade Analysis Demo", layout="wide")
 # Load & Clean Data
 # ----------------------------
 @st.cache_data
-def load_data(path="exim_data.xlsx", sheet_name="Trade analysis report"):
+def load_data(path="EXIM_Trade_Analysis_Report_579700_042024114401 (1).xlsx", sheet_name="Trade analysis report"):
     # read excel (header at row index 2)
     df = pd.read_excel(path, sheet_name=sheet_name, header=2)
 
@@ -210,3 +210,4 @@ st.download_button(
     "filtered_data.csv",
     "text/csv"
 )
+
